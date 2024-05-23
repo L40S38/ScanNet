@@ -9,6 +9,8 @@ from preprocessing.pipelines import padd_matrix
 from network.embeddings import GaussianKernel,initialize_GaussianKernel
 from preprocessing import PDB_processing
 
+import logging
+logger = logging.getLogger(__name__)
 
 def distance_pcs(cloud1,cloud2,squared=False):
     distance = (tf.expand_dims(cloud1[...,0],axis=-1) - tf.expand_dims(cloud2[...,0],axis=-2) )**2
@@ -52,7 +54,7 @@ class FrameBuilder(Layer):
 
         triplets = tf.clip_by_value(triplets, 0, tf.shape(points)[-2]-1)
 
-
+        # pointsにたいしてtriplets[:, :, 1:2]のインデックスに対応する値を返す
         delta_10 = tf.gather_nd(points, triplets[:, :, 1:2], batch_dims=1) - tf.gather_nd(points, triplets[:, :, 0:1],
                                                                                           batch_dims=1)
         delta_20 = tf.gather_nd(points, triplets[:, :, 2:3], batch_dims=1) - tf.gather_nd(points, triplets[:, :, 0:1],
@@ -69,6 +71,8 @@ class FrameBuilder(Layer):
         xaxis = tf.linalg.cross(yaxis, zaxis)
         xaxis = (xaxis + self.epsilon * tf.reshape(self.xaxis,[1,1,3]) ) / (tf.sqrt(tf.reduce_sum(xaxis ** 2, axis=-1, keepdims=True)) + self.epsilon)
 
+        logger.debug(f"zaxis={zaxis},yaxis={yaxis},xaxis={xaxis}")
+
         if self.order == '3':
             xaxis,yaxis,zaxis = zaxis,xaxis,yaxis
 
@@ -81,6 +85,7 @@ class FrameBuilder(Layer):
 
         if mask not in [None,[None,None]]:
             frames *= tf.expand_dims(tf.expand_dims(tf.cast(mask[-1],tf.float32),axis=-1),axis=-1)
+        logger.debug(f"frames={frames}")
         return frames
 
     def compute_output_shape(self, input_shape):
@@ -492,15 +497,18 @@ def get_Frames(inputs,n_samples=None,padded=False,order='1',dipole=False,Lmax=No
             padd_matrix(inputs[0][b_], padded_matrix=triplets_[b_], padding_value=-1)
             padd_matrix(inputs[1][b_], padded_matrix=clouds_[b_], padding_value=0)
 
+    logger.debug(f"triplets_={triplets_},clouds_={clouds_},Lmax={Lmax},Lmax2={Lmax2}")
     inputs_ = [triplets_,clouds_]
 
     triplets = Input(shape=[Lmax, nindices], dtype="int32",name='triplets')
     clouds = Input(shape=[Lmax2, 3], dtype="float32",name='clouds')
     masked_triplets = Masking(mask_value=-1, name='masked_triplets')(triplets)
     masked_clouds = Masking(mask_value=0.0, name='masked_clouds')(clouds)
+    logger.debug(f"triplets={triplets},clouds={clouds},masked_triplets={masked_triplets},masked_clouds={masked_clouds}")
     frames = FrameBuilder(name='frames',order=order,dipole=dipole)([masked_clouds,masked_triplets])
     first_layer = Model(
         inputs=[triplets,clouds], outputs=frames)
+    logger.debug(f"first_layer={first_layer.summary()}")
     frames_ = first_layer.predict(inputs_)
     if not padded:
         frames_ = wrappers.truncate_list_of_arrays(frames_,Ls)

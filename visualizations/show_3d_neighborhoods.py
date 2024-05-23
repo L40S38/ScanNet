@@ -4,6 +4,10 @@ from preprocessing import PDBio,PDB_processing,pipelines,protein_chemistry
 from network import neighborhoods
 from visualizations import weight_logo_3d
 import copy
+
+import logging
+logger = logging.getLogger(__name__)
+
 def rgb_to_hex(rgb):
     if isinstance(rgb, str):
         return rgb
@@ -53,6 +57,7 @@ def show_atoms(
     ]
     VanDerWaalsRadii = np.array([1.70, 1.52, 1.55, 1.80])
 
+    # 結合の長さと向きを取得
     bond_orientations = [atom_positions[atom_bond[1]] - atom_positions[atom_bond[0]] for atom_bond in atom_bonds]
     bond_lengths = [np.sqrt((bond_orientation ** 2).sum(-1)) for bond_orientation in bond_orientations]
     bond_orientations = [bond_orientation / np.sqrt((bond_orientation ** 2).sum(-1, keepdims=True)) for bond_orientation
@@ -219,17 +224,22 @@ def get_neighborhood(
         chain_ids = assembly
     else:
         chain_ids = [(model,chain)]
+
+    # proteinのstructure全体とchainごとのオブジェクト(のリスト)
     struct, chains = PDBio.load_chains(file=filename,chain_ids=chain_ids)
     pipeline = pipelines.ScanNetPipeline(aa_features='sequence',
                                          atom_features='id'
                                          )
+    logger.debug(f"struct={struct}, chains={chains}")
 
+    # chainsの情報を取得
+    # aa_cloudsはCalpha, atom_cloudsは原子座標配列, hogehoge_tripletsは原子や残基の隣接情報(n,n-1,n+1)的なもの
     [aa_triplets, aa_attributes,aa_indices,aa_clouds,
      atom_triplets, atom_ids, atom_indices, atom_clouds],_ = pipeline.process_example(chains)
     atom_ids -=1
     atom_attributes = protein_chemistry.index_to_type[atom_ids]+1
 
-
+    # residueのidリスト
     resids = PDB_processing.get_PDB_indices(chains,return_chain=True,return_model=True)
 
     if (atom is not None) | (atomindex is not None):
@@ -256,7 +266,7 @@ def get_neighborhood(
                                     )[0][0]
             except:
                 raise ValueError('Residue #%s/%s:%s not found' % (model, chain, resnumber))
-
+    logger.debug(f"index={index},resindex={resindex}")
 
     if (atom is not None) | (atomindex is not None):
         frames = neighborhoods.get_Frames(
@@ -264,12 +274,15 @@ def get_neighborhood(
     else:
         frames = neighborhoods.get_Frames(
             [[aa_triplets[index:index+1]],[aa_clouds]], order='2')
+    logger.debug(f"frames={frames}")
 
-
+    #　近くの原子の情報取得
+    logger.debug(f"atom_clouds={atom_clouds}, atom_attributes={atom_attributes}")
     _, atom_types =  neighborhoods.get_LocalNeighborhood([ [frames[0]], [atom_clouds[atom_triplets[:,0]]]  ],{'self_neighborhood':False,'Kmax': Kmax},attributes= [atom_attributes],
                                         )
     atom_positions, atom_triplets =  neighborhoods.get_LocalNeighborhood([ [frames[0]], [atom_clouds[atom_triplets[:,0]]]  ],{'self_neighborhood':False,'Kmax': Kmax},attributes= [atom_triplets],
                                         )
+    logger.debug(f"atom_types={atom_types}, atom_positions={atom_positions}, atom_triplets={atom_triplets}")
 
     atom_types = atom_types.astype(np.int)
     atom_triplets = atom_triplets.astype(np.int)

@@ -11,6 +11,9 @@ from preprocessing import PDBio,PDB_processing,pipelines,protein_chemistry
 from network import neighborhoods
 import numpy as np
 
+import logging
+logger = logging.getLogger(__name__)
+
 
 def activity2percentile(filter_activity, percentiles):
     filter_percentiles = np.zeros_like(filter_activity)
@@ -42,11 +45,15 @@ def calculate_filter_specificities(model_name,
     filter_specificities = {}
     path2filter_specificities = visualization_folder + 'filter_specificities_%s.data' % model_name
     if not only_atom:
+        # 既存の特異性データがある場合はロードするだけ
         if not fresh:
             if os.path.exists(path2filter_specificities):
                 return io_utils.load_pickle(path2filter_specificities)
 
+        #進化情報を用いるか否か
         use_evolutionary = not ('noMSA' in model_name)
+
+        #パイプラインの構築
         pipeline = pipelines.ScanNetPipeline(
             with_atom=True,
             atom_features = 'id',
@@ -55,6 +62,7 @@ def calculate_filter_specificities(model_name,
         handcrafted_pipeline = pipelines.HandcraftedFeaturesPipeline(feature_list=['primary','secondary','asa'])
 
         if dataset_origins is not None:
+            #データセットの構築
             inputs_scannet, _, failed_samples_scannet = pipeline.build_processed_dataset(
                 dataset_name,
                 list_origins=dataset_origins,  # Mandatory
@@ -74,9 +82,11 @@ def calculate_filter_specificities(model_name,
             )
 
             if failed_samples_scannet != failed_samples_handcrafted:
+                # 成功したもののみを抽出
                 scannet_success_origins = [dataset_origins[i] for i in range(len(dataset_origins)) if not i in failed_samples_scannet]
                 handcrafted_success_origins = [dataset_origins[i] for i in range(len(dataset_origins)) if not i in failed_samples_handcrafted]
-
+                
+                # maskとinputsの作成
                 mask_scannet = np.array([origin in handcrafted_success_origins for origin in scannet_success_origins])
                 mask_handcrafted = np.array([origin in scannet_success_origins for origin in handcrafted_success_origins])
 
@@ -91,7 +101,7 @@ def calculate_filter_specificities(model_name,
             all_inputs_handcrafted = []
 
             for dataset_name_ in dataset_name:
-
+                #データセットの構築
                 inputs_scannet, _, failed_samples_scannet = pipeline.build_processed_dataset(
                     dataset_name_,
                     biounit=biounit,
@@ -108,9 +118,11 @@ def calculate_filter_specificities(model_name,
                 )
 
                 if failed_samples_scannet != failed_samples_handcrafted:
+                    # 成功したもののみを抽出
                     scannet_success_origins = [dataset_origins[i] for i in range(len(dataset_origins)) if not i in failed_samples_scannet]
                     handcrafted_success_origins = [dataset_origins[i] for i in range(len(dataset_origins)) if not i in failed_samples_handcrafted]
 
+                    # maskとinputsの作成
                     mask_scannet = np.array([origin in handcrafted_success_origins for origin in scannet_success_origins])
                     mask_handcrafted = np.array([origin in scannet_success_origins for origin in handcrafted_success_origins])
 
@@ -122,6 +134,7 @@ def calculate_filter_specificities(model_name,
             inputs_scannet = wrappers.stack_list_of_arrays(all_inputs_scannet,padded=False)
             inputs_handcrafted = wrappers.stack_list_of_arrays(all_inputs_handcrafted, padded=False)
 
+        # 入力データの長さの不一致をチェックし、適合しない例を除外
         mask_identical = []
         for i in range(len(inputs_scannet[0])):
             L_scannet = len(inputs_scannet[0][i])
@@ -142,7 +155,7 @@ def calculate_filter_specificities(model_name,
         sequences = [np.argmax(handcrafted_feature[:, :20], axis=-1) for handcrafted_feature in inputs_handcrafted]
         inputs_scannet[5] = [protein_chemistry.index_to_valency[sequence[atom_index[:,0]],atom_id-1]+1 for sequence,atom_index,atom_id in zip(sequences,inputs_scannet[6],inputs_scannet[5])]
 
-
+        # modelをロード、layerのoutputを取得
         model = wrappers.load_model(model_folder+model_name,Lmax=Lmax)
         layer_outputs = [model.model.get_layer(layer).output for layer in ['SCAN_filter_activity_atom','all_embedded_attributes_aa','SCAN_filter_activity_aa','classifier_output'] ]
         model.model = Model(inputs=model.model.inputs,outputs= layer_outputs
@@ -154,6 +167,7 @@ def calculate_filter_specificities(model_name,
             inputs_scannet = wrappers.slice_list_of_arrays(inputs_scannet,np.arange(nmax))
             inputs_handcrafted = wrappers.slice_list_of_arrays(inputs_handcrafted,np.arange(nmax))
 
+        # フィルター表示に必要な値の計算
         [atomic_filter_activities,aggregated_atomic_filter_activities,aminoacid_filter_activities,classifier_output] = model.predict(inputs_scannet,return_all=True)
         atomic_filter_activities_flat = np.concatenate(atomic_filter_activities)
         aggregated_atomic_filter_activities_flat = np.concatenate(aggregated_atomic_filter_activities)
@@ -325,12 +339,16 @@ def plot_atomic_filter(filter_specificities, index, threshold1=0.33, threshold2=
     if camera_position is None:
         camera_position = [0.8, 0.5, 0.8]
 
+    # 原子のフィルターの特徴量を計算
     atom_gaussian_weights = filter_specificities['atom_specificity'][:,:,index]
     centers = filter_specificities['atom_gaussian']['centers']
     covariances = filter_specificities['atom_gaussian']['covariances']
     atom_features = filter_specificities['atom_features']
+    logger.debug(f"atom_gaussian_weights={atom_gaussian_weights},centers={centers},covariances={covariances},atom_features={atom_features}")
 
+    # 重要なガウシアンだけ抽出する
     important_gaussians = np.nonzero(np.abs(atom_gaussian_weights).max(0) > max(threshold2,threshold1 * np.abs(atom_gaussian_weights).max() ) )[0]
+    logger.debug(f"important_gaussians={important_gaussians}")
 
     logo_length_pos = np.maximum(atom_gaussian_weights[:, important_gaussians], 0).sum(0)
     logo_length_neg = np.maximum(-atom_gaussian_weights[:, important_gaussians], 0).sum(0)
@@ -342,7 +360,7 @@ def plot_atomic_filter(filter_specificities, index, threshold1=0.33, threshold2=
 
     ymax = np.maximum(logo_length_pos,logo_length_neg).max()
     list_ellipsoids = [(centers[:, u], covariances[u]) for u in important_gaussians]
-
+    logger.debug(f"list_ellipsoids={list_ellipsoids}")
 
     if atom_features == 'type':
         weight_logo = weight_logo_3d.weight_logo_atom
@@ -354,9 +372,11 @@ def plot_atomic_filter(filter_specificities, index, threshold1=0.33, threshold2=
         atom_colors = weight_logo_3d.valency_colors
     else:
         raise ValueError
-
+    
+    # ガウシアン楕円体のリスト
     list_figures = [weight_logo(atom_gaussian_weights[:, u], ymax=ymax, threshold=threshold2) for u
                     in important_gaussians]
+    logger.debug(f"list_figures={list_figures}")
     list_colors = []
     for u in important_gaussians:
         if atom_gaussian_weights[:, u].max() > threshold2:
@@ -364,7 +384,7 @@ def plot_atomic_filter(filter_specificities, index, threshold1=0.33, threshold2=
         else:
             color = 'gray'
         list_colors.append(color)
-
+    logger.debug(f"list_colors={list_colors}")
     return weight_logo_3d.show_ellipsoids(list_ellipsoids=list_ellipsoids,
                                           list_colors=list_colors,
                                           list_figures=list_figures,
@@ -400,7 +420,7 @@ def plot_aminoacid_filter(filter_specificities,
     centers = filter_specificities['aa_gaussian']['centers']
     covariances = filter_specificities['aa_gaussian']['covariances']
     ngaussians = centers.shape[-1]
-
+    logger.debug(f"centers:{centers},covariances={covariances}")
 
     aa = filter_specificities['aa_specificity']['aa'][index]
     if show_negative:
@@ -433,13 +453,17 @@ def plot_aminoacid_filter(filter_specificities,
         value_neg = filter_specificities['aa_specificity']['value_neg'][index]
     else:
         value_neg = value * 0
+    
+    logger.debug(f"aa_neg={aa_neg},ss_neg={ss_neg},asa_neg={asa_neg},value_neg={value_neg}")
 
     maximum = np.maximum(np.abs(value).max(),np.abs(value_neg).max() )
     scaling = value/maximum
     scaling_neg = np.abs(value_neg/maximum)
     important_gaussians = np.nonzero( (scaling > threshold1)  | (scaling_neg > threshold1) )[0]
+    logger.debug(f"important_gaussians={important_gaussians}")
 
     list_ellipsoids = [(centers[:, u], covariances[u]) for u in important_gaussians]
+    logger.debug(f"list_ellipsoids={list_ellipsoids}")
 
     list_figures = [weight_logo_3d.complex_filter_logo(
         aa[u],
@@ -451,8 +475,10 @@ def plot_aminoacid_filter(filter_specificities,
         scaling_='none',
         scaling=scaling[u],
         scaling_neg=scaling_neg[u]) for u in important_gaussians]
+    logger.debug(f"list_figures={list_figures}")
 
     list_colors = [weight_logo_3d.aa_colors[weight_logo_3d.list_aa[np.argmax(aa[u])]] for u in important_gaussians]
+    logger.debug(f"list_colors={list_colors}")
 
     return weight_logo_3d.show_ellipsoids(list_ellipsoids=list_ellipsoids,
                                           list_colors=list_colors,

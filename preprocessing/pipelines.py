@@ -17,7 +17,8 @@ except Exception as e:
     print('Failed to import numba-dependent packages!')
     print(e)
 
-
+import logging
+logger = logging.getLogger(__name__)
 
 database_locations = {}
 database_locations['dockground'] = pipeline_folder + \
@@ -839,7 +840,6 @@ class ScanNetPipeline(Pipeline):
                 aa_triplets = remove_nan(aa_triplets, padding_value=-1)
                 aa_attributes = remove_nan(aa_attributes, padding_value=0.)
                 aa_indices = remove_nan(aa_indices, padding_value=-1 )
-
 
         if self.with_atom:
             atom_clouds, atom_triplets, atom_attributes, atom_indices = protein_frames.get_atom_frameCloud(sequence, atomic_coordinates,atom_ids)

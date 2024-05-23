@@ -17,6 +17,9 @@ import copy
 import matplotlib.image as mpimg
 import matplotlib.patches as mpatches
 
+import logging
+logger = logging.getLogger(__name__)
+
 fp = FontProperties(family="monospace", weight="bold")
 globscale = 1.2
 
@@ -385,6 +388,7 @@ def complex_filter_logo(aa_probability,
     if aa_probability_neg is not None:
         categories_logo(aa_probability_neg, 'aa', ax=ax[count], scaling=scaling_, multiplier=scaling_neg, orientation='-')
     count +=1
+    # ここで円グラフの描画を行っている
     if asa_probability is not None:
         categories_logo(asa_probability, 'asa', ax=ax[count], scaling=scaling_, multiplier=scaling,
                         orientation='+')
@@ -547,17 +551,19 @@ def show_ellipsoids(list_ellipsoids=[(np.zeros(3), np.eye(3))],
     d2camera = np.array([((np.array(camera_position) - list_ellipsoids[n][0]) ** 2).sum() for n in range(nellipsoids)])
     order = np.argsort(d2camera)[::-1]
 
+    logger.debug("====d2camera=====")
     for n in order:
-        center, inertia = list_ellipsoids[n]
+        center, inertia = list_ellipsoids[n] # centerは平均ベクトル、inertiaは共分散行列
         color = list_colors[n]
         figure = list_figures[n]
         text = list_texts[n]
+        logger.debug(f"center={center},inertia={inertia},color={color},figure={figure},text={text}")
 
-        lam, U = np.linalg.eigh(inertia)
-        sqrt_inertia = np.dot(U, np.sqrt(lam)[:, np.newaxis] * U.T)
+        lam, U = np.linalg.eigh(inertia) #　固有値と固有ベクトル
+        sqrt_inertia = np.dot(U, np.sqrt(lam)[:, np.newaxis] * U.T) # sqrt_inertia * sqrt_inertia = inertia
         ellipsoids_V = level * np.dot(sphere_V, sqrt_inertia)
         ellipsoids_V = ellipsoids_V.tolist()
-        sphereG = pythreejs.Geometry(vertices=ellipsoids_V, faces=sphere_F)
+        sphereG = pythreejs.Geometry(vertices=ellipsoids_V, faces=sphere_F) #ellipsoids_Vをメッシュで描画するためのオブジェクト
 
         if figure is not None:
             sprite = matplotlib_to_sprite(figure, center + offset, scale=scale, figname='fig_%s' % n,tmp_folder=tmp_folder,dpi=dpi,crop=crop)
@@ -584,6 +590,7 @@ def show_ellipsoids(list_ellipsoids=[(np.zeros(3), np.eye(3))],
         children.append(ellipsoid_surface)
     children = children[:3]+children2+children[3:]
 
+    # 座標軸の描画
     if show_frame:
         g = pythreejs.LineSegmentsGeometry(
             positions=[

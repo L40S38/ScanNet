@@ -1,14 +1,14 @@
 import numpy as np
 from utilities import io_utils
 
-
+# mask=Trueのところだけ抽出
 def slice_list_of_arrays(arrays, mask):
     if isinstance(arrays, tuple) | isinstance(arrays, list):
         return [slice_list_of_arrays(array, mask) for array in arrays]
     else:
         return arrays[mask]
 
-
+# arrayを繋げる
 def stack_list_of_arrays(arrays,padded=True):
     if isinstance(arrays[0], tuple) | isinstance(arrays[0], list):
         return [stack_list_of_arrays([array[k] for array in arrays],padded=padded) for k in range(len(arrays[0])) ]
@@ -19,7 +19,7 @@ def stack_list_of_arrays(arrays,padded=True):
             return np.array(list(arrays), dtype=np.object)
 
 
-
+# arrayを配列にスプリット（ex. 長さnの配列を(n,1)のベクトルへ）
 def split_list_of_arrays(arrays, segment_lengths):
     nsplits = len(segment_lengths)
     split_indexes = [0] + list(np.cumsum(segment_lengths))
@@ -28,7 +28,7 @@ def split_list_of_arrays(arrays, segment_lengths):
     else:
         return np.array([arrays[split_indexes[i]:split_indexes[i + 1]] for i in range(nsplits)])
 
-
+# arrayを長さLsで切る
 def truncate_list_of_arrays(arrays, Ls):
     if isinstance(arrays, tuple) | isinstance(arrays, list):
         return [truncate_list_of_arrays(array, Ls) for array in arrays]
@@ -38,6 +38,7 @@ def truncate_list_of_arrays(arrays, Ls):
         else:
             return np.array([array[:Ls] for array in arrays])
 
+# モデルのロード
 def load_model(location, Lmax=None,load_weights=True):
     pickle_location = location + '.data'
     env = io_utils.load_pickle(pickle_location)
