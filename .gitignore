@@ -144,3 +144,7 @@ datasets/.DS_Store
 datasets/.DS_Store
 utilities/paths_jerome.py
 *test.ipynb
+
+# ignore nohup.out
+nohup.out
+*/nohup.out
