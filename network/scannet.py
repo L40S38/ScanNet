@@ -10,6 +10,11 @@ import tensorflow as tf
 from utilities import wrappers,io_utils
 from preprocessing import PDB_processing
 
+import logging
+logger = logging.getLogger(__name__)
+
+import keras
+
 
 def l1_regularization(W, l1):
     return l1 * K.sum(K.abs(W))
@@ -300,6 +305,7 @@ def ScanNet(
     except:
         print('Initial values for graph dense not found, random initialization...')
         initial_values['dense_graph'] = [np.random.rand(N_graph, nembedding_graph)]
+    logger.debug(f"initial_values:{initial_values}")
 
     # Given maximum number of amino acids, define other maximum values.
     if Lmax_atom is None:
@@ -326,12 +332,14 @@ def ScanNet(
     attributes_aa = Input(shape=[Lmax_aa, nfeatures_aa], name='attributes_aa', dtype="float32") # The attributes of the amino acids (PWM/ one-hot encoded sequence).
     sequence_indices_aa = Input(shape=[Lmax_aa, 1], name='sequence_indices_aa', dtype="int32") # The position of each amino acid on the sequence.
     point_clouds_aa = Input(shape=[Lmax_aa_points, 3], name='point_clouds_aa', dtype="float32") # 3D coordinates of the amino acids point clouds. (Calpha coordinates, side chain center of mass,...).
+    logger.debug(f"frame_indices_aa:{frame_indices_aa},attributes_aa:{attributes_aa},sequence_indices_aa:{sequence_indices_aa},point_clouds_aa:{point_clouds_aa}")
 
     # Same, after masking.
     masked_frame_indices_aa = Masking(mask_value=-1, name='masked_frame_indices_aa')(frame_indices_aa)
     masked_attributes_aa = Masking(mask_value=0.0, name='masked_attributes_aa')(attributes_aa)
     masked_sequence_indices_aa = Masking(mask_value=-1, name='masked_sequence_indices_aa')(sequence_indices_aa)
     masked_point_clouds_aa = Masking(mask_value=0.0, name='masked_point_clouds_aa')(point_clouds_aa)
+    logger.debug(f"masked_frame_indices_aa:{masked_frame_indices_aa},masked_attributes_aa:{masked_attributes_aa},masked_sequence_indices_aa:{masked_sequence_indices_aa},masked_point_clouds_aa:{masked_point_clouds_aa}")
 
     # Same at atomic scale.
     if with_atom:
@@ -339,10 +347,12 @@ def ScanNet(
         attributes_atom = Input(shape=[Lmax_atom], name='attributes_atom', dtype="int32")
         sequence_indices_atom = Input(shape=[Lmax_atom, 1], name='sequence_indices_atom', dtype="int32")
         point_clouds_atom = Input(shape=[Lmax_atom_points, 3], name='point_clouds_atom', dtype="float32")
+        logger.debug(f"frame_indices_atom:{frame_indices_atom},attributes_atom:{attributes_atom},sequence_indices_atom:{sequence_indices_atom},point_clouds_atom:{point_clouds_atom}")
 
         masked_frame_indices_atom = Masking(mask_value=-1, name='masked_frame_indices_atom')(frame_indices_atom)
         masked_sequence_indices_atom = Masking(mask_value=-1, name='masked_sequence_indices_atom')(sequence_indices_atom)
         masked_point_clouds_atom = Masking(mask_value=0.0, name='masked_point_clouds_atom')(point_clouds_atom)
+        logger.debug(f"masked_frame_indices_atom:{masked_frame_indices_atom},masked_sequence_indices_atom:{masked_sequence_indices_atom},masked_point_clouds_atom:{masked_point_clouds_atom}")
 
 
     ## Embed attributes.
@@ -353,7 +363,7 @@ def ScanNet(
         normalizer = np.sqrt(nfeatures_aa)
         embedded_attributes_aa = TimeDistributed(Lambda(lambda x: normalizer * x), name='embedded_attributes_aa')(masked_attributes_aa)
         nembedding_aa = nfeatures_aa
-
+    logger.debug(f"embedded_attributes_aa:{embedded_attributes_aa}")
     if with_atom:
         if nfeatures_atom == nembedding_atom:
             trainable = False  # Same number of categories as output dimension. Use one-hot encoding.
@@ -363,7 +373,8 @@ def ScanNet(
             nfeatures_atom + 1, nembedding_atom, mask_zero=True, embeddings_initializer=utils.embeddings_initializer,
             embeddings_constraint=utils.FixedNorm(axis=0, value=np.sqrt(nfeatures_atom)), trainable=trainable,
             name='embedded_attributes_atom')(attributes_atom)
-
+        logger.debug(f"embedded_attributes_atom:{embedded_attributes_atom}")
+        
         ## If atomic coordinates are included, compute embeddings of atomic neighborhoods.
         SCAN_filters_atom = neighborhood_embedding(
             masked_point_clouds_atom,
@@ -383,7 +394,7 @@ def ScanNet(
             nfilters=nfilters_atom,
             activation=activation,
             scale='atom')
-
+        logger.debug(f"SCAN_filters_atom:{SCAN_filters_atom}")
 
         # Pool at amino acid level by attention-pooling.
         if dense_pooling is None:
@@ -401,7 +412,7 @@ def ScanNet(
                                                   kernel_regularizer=kernel_regularizer,
                                                   kernel_initializer=Zeros()),
                                             name='attention_pooling_coefficients_atom')(SCAN_filters_atom)
-
+        logger.debug(f"pooling_attention:{pooling_attention}")
         # Compute output coefficients (before averaging) for each atom.
         pooling_features = TimeDistributed(Dense(dense_pooling, activation=None, use_bias=False,
                                            kernel_regularizer=kernel_regularizer,
@@ -409,6 +420,7 @@ def ScanNet(
                                            #kernel_initializer= RandomUniform(minval=0,maxval=np.sqrt(3/nfilters_atom))
                                                  ),
                                            name='attention_pooling_features_atom')(SCAN_filters_atom)
+        logger.debug(f"pooling_features:{pooling_features}")
 
 
         # Build a binary bipartite graph from amino acid to atoms.
@@ -421,27 +433,29 @@ def ScanNet(
                                                                                                         name='pooling_intermediate_atom')(
             [masked_sequence_indices_aa, masked_sequence_indices_atom, pooling_attention, pooling_features])
         # Here pooling_mask is a binary matrix of size [L_aa, L_atom], with M_{ij} =0 iff atom j belongs to amino acid i.
-
+        logger.debug(f"pooling_attention_local:{pooling_attention_local},pooling_features_local:{pooling_features_local}")
 
         pooling_mask = Lambda(lambda x: 1 - x, name='pooling_edges_atom')(
             pooling_mask)
         # Reverse the pooling mask such that M_{ij} =1 iff atom j belongs to amino acid i.
-
+        logger.debug(f"pooling_mask:{pooling_mask}")
 
         SCAN_filters_atom_aggregated_input, _ = attention.AttentionLayer(self_attention=False, beta=False,
                                                         name='SCAN_filters_atom_aggregated_input')(
             [pooling_attention_local, pooling_features_local, pooling_mask])
         # Attention-based aggregation of atom features to amino acid scale.
+        logger.debug(f"SCAN_filters_atom_aggregated_input:{SCAN_filters_atom_aggregated_input}")
 
         SCAN_filters_atom_aggregated_activity = addNonLinearity(SCAN_filters_atom_aggregated_input, activation,name='SCAN_filters_atom_aggregated_activity')
         # Add final non-linearity.
+        logger.debug(f"SCAN_filters_atom_aggregated_activity:{SCAN_filters_atom_aggregated_activity}")
 
 
     if with_atom:
         all_embedded_attributes_aa = Concatenate(name='all_embedded_attributes_aa', axis=-1)([embedded_attributes_aa, SCAN_filters_atom_aggregated_activity] )
     else:
         all_embedded_attributes_aa = Activation('linear',name='all_embedded_attributes_aa')(embedded_attributes_aa)
-
+    logger.debug(f"all_embedded_attributes_aa:{all_embedded_attributes_aa}")
 
 
     # Compute embeddings of amino acid neighborhoods.
@@ -465,6 +479,7 @@ def ScanNet(
         activation=activation,
         scale='aa',
         return_frames=True)
+    logger.debug(f"SCAN_filters_aa:{SCAN_filters_aa},frames_aa:{frames_aa}")
 
     if dropout > 0:
         SCAN_filters_aa = Dropout(dropout, noise_shape=(
@@ -542,6 +557,10 @@ def ScanNet(
     model.get_layer('edges_graph').set_weights(
         initial_values['dense_graph'])
     model.summary()
+    
+    # モデルをグラフ描画
+    # モデルを可視化します
+    keras.utils.plot_model(model, to_file="ScanNet.png", show_shapes=True)
     return model
 
 

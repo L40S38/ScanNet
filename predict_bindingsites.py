@@ -16,6 +16,9 @@ import argparse
 from keras.models import Model
 from utilities.paths import structures_folder,MSA_folder,predictions_folder,path2hhblits,path2sequence_database,model_folder
 
+import logging
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.DEBUG)
 
 pipeline_MSA = pipelines.ScanNetPipeline(
     with_aa=True,
@@ -157,6 +160,7 @@ def predict_interface_residues(
         print('No input provided for interface prediction using %s' %
               model_name, file=logfile)
         return
+    logger.debug(f"predict_from_pdb:{predict_from_pdb}, predict_from_sequence:{predict_from_sequence}, query_sequence:{query_sequences}")
 
     if query_names is None:
         if predict_from_pdb:
@@ -169,12 +173,14 @@ def predict_interface_residues(
             first_aa = [sequence[:5] for sequence in query_sequences]
             query_names = ['seq_%s_start:%s_L:%s' % (
                 i, first_aa[i], sequence_lengths[i]) for i in range(nqueries)]
+    logger.debug(f"query_names:{query_names}")
+            
     if use_MSA:
         if query_MSAs is None:
             query_MSAs = [None for _ in query_names]
         if query_PWMs is None:
             query_PWMs = [None for _ in query_names]
-
+    logger.debug(f"query_MSAs={query_MSAs}")
 
     # Locate pdb files or download from pdb server.
     if predict_from_pdb:
@@ -199,6 +205,7 @@ def predict_interface_residues(
             else:
                 pdb_file_locations.append(location)
                 i += 1
+        logger.debug(f"pdb_file_locations:{pdb_file_locations}")
 
     # Parse pdb files.
         query_chain_objs = []
@@ -241,8 +248,10 @@ def predict_interface_residues(
                 else:
                     return
 
+        logger.debug(f"query_chain_objs:{query_chain_objs},query_chain_names:{query_chain_names}")
         query_sequences = [[PDB_processing.process_chain(chain_obj)[0]
                             for chain_obj in chain_objs] for chain_objs in query_chain_objs]
+        logger.debug(f"query_sequences:{query_sequences}")
 
         if Lmin > 0:
             for i in range(npdbs):
@@ -298,7 +307,7 @@ def predict_interface_residues(
     print('List of inputs:', file=logfile)
     for i in range(nqueries):
         print(query_chain_names[i], file=logfile)
-
+    logger.debug(f"query_chain_names:{query_chain_names}")
     if use_MSA:
         i = 0
         while i < nqueries:
@@ -364,6 +373,7 @@ def predict_interface_residues(
         else:
             query_MSAs = [[None for _ in query_chain_names[i]] for i in range(nqueries)]
             query_PWMs = [[None for _ in query_chain_names[i]] for i in range(nqueries)]
+    logger.debug(f"query_MSAs:{query_MSAs},query_PWMs:{query_PWMs}")
 
     sequence_lengths = [[len(sequence) for sequence in sequences]
                            for sequences in query_sequences]
@@ -428,6 +438,7 @@ def predict_interface_residues(
         return_all = True
     else:
         return_all = False
+    logger.debug(f"multi_models:{multi_models},model_objs:{model_objs},model_obj:{model_obj}")
 
     if hasattr(pipeline, 'Lmax'):
         pipeline.Lmax = Lmax
@@ -441,11 +452,11 @@ def predict_interface_residues(
     else:
         padded = True
 
-
     if assembly:
         inputs = wrappers.stack_list_of_arrays(
         [pipeline.process_example(chain_obj=chain_obj, sequence=sequence, MSA_file=MSA_file_location,PWM=PWM)[0]
          for chain_obj, sequence, MSA_file_location,PWM in zip(query_chain_objs, query_sequences, query_MSAs,query_PWMs)], padded=padded)
+        logger.debug(f"inputs:{inputs}")
         if multi_models:
             if aggregate_models:
                  query_predictions = model_objs[0].predict(inputs, batch_size=1,return_all=return_all)
@@ -457,11 +468,12 @@ def predict_interface_residues(
                 query_predictions = [model_obj.predict(inputs, batch_size=1,return_all=return_all) for model_obj in model_objs]
         else:
             query_predictions = model_obj.predict(inputs, batch_size=1,return_all=return_all)
-
+        
         if padded:
             query_predictions = wrappers.truncate_list_of_arrays(
                 query_predictions, assembly_lengths)
-
+        logger.debug(f"query_predictions:{query_predictions}")
+        
         has_attention_layer = False
         if layer == 'attention_layer':
             has_attention_layer = True
@@ -500,6 +512,7 @@ def predict_interface_residues(
                 query_predictions = aggregated_attention_coeffs
             else:
                 query_predictions[index] = aggregated_attention_coeffs
+        logger.debug(f"query_predictions:{query_predictions}")
 
     else:
         query_predictions = []
@@ -507,6 +520,7 @@ def predict_interface_residues(
             inputs = wrappers.stack_list_of_arrays(
     [pipeline.process_example(chain_obj=chain_obj, sequence=sequence, MSA_file=MSA_file_location,PWM=PWM)[0]
     for chain_obj, sequence, MSA_file_location,PWM in zip(query_chain_objs[i], query_sequences[i], query_MSAs[i],query_PWMs[i])], padded=padded)
+            logger.debug(f"inputs:{inputs}")
             if multi_models:
                 if aggregate_models:
                      predictions = model_objs[0].predict(inputs, batch_size=1,return_all=return_all)
@@ -518,6 +532,7 @@ def predict_interface_residues(
                     predictions = [model_obj.predict(inputs, batch_size=1,return_all=return_all) for model_obj in model_objs]
             else:
                 predictions = model_obj.predict(inputs, batch_size=1,return_all=return_all)
+            logger.debug(f"predictions:{predictions}")
 
             if padded:
                 predictions = wrappers.truncate_list_of_arrays(
@@ -570,8 +585,10 @@ def predict_interface_residues(
                 query_predictions.append(
                     np.concatenate(predictions, axis=0)
                 )
+            logger.debug(f"query_predictions:{query_predictions}")
         if ((isinstance(layer, list)) | (isinstance(layer, tuple)) | (not aggregate_models)):
             query_predictions = [ [query_predictions[k][l] for k in range(len(query_predictions))] for l in range(len(query_predictions[0])) ]
+        logger.debug(f"query_predictions:{query_predictions}")
 
 
 
@@ -582,17 +599,21 @@ def predict_interface_residues(
 
     if output_predictions:
         for i in range(nqueries):
+            logger.debug(f"====Query {i} output====")
             res_ids = query_residue_ids[i]
             sequence = query_sequences[i]
+            logger.debug(f"res_ids:{res_ids},sequence:{sequence}")
             if ((isinstance(layer, list)) | (isinstance(layer, tuple)) | (not aggregate_models)):
                 predictions = [query_predictions_[i] for query_predictions_ in query_predictions]
             else:
                 predictions = query_predictions[i]
+            logger.debug(f"predictions:{predictions}")
             query_name = query_names[i]
             query_chain = query_chain_ids[i]
             query_chain_id_is_all = query_chain_id_is_alls[i]
             query_pdb = query_pdbs[i]
             file_is_cif = (pdb_file_locations[i][-4:] == '.cif')
+            logger.debug(f"query_name:{query_name},query_chain:{query_chain},query_chain_id_is_all:{query_chain_id_is_all},query_pdb:{query_pdb}")
 
             query_output_folder = output_folder+query_name
             if (len(query_pdb) == 4) & biounit:
